@@ -2,419 +2,391 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>UniPlanner PWA Ultra</title>
-    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UniPlanner - Multi-day CSV Sync</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        darkBg: '#0a0a0a',
-                        darkCard: '#121212',
-                        lightBg: '#f4f4f5',
-                        lightCard: '#ffffff'
-                    }
-                }
-            }
-        }
-    </script>
-    
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono&display=swap');
-        
-        body { 
-            font-family: 'Inter', sans-serif; 
-            margin: 0; 
-            -webkit-tap-highlight-color: transparent;
-            overflow-x: hidden;
-        }
-
-        .event-node {
-            border-left-width: 3px;
-            transition: all 0.15s ease;
-        }
-
-        @media (max-width: 640px) {
-            .grid-cols-mobile {
-                grid-template-columns: 35px repeat(6, 1fr);
-            }
-        }
-        
-        .header-blur {
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-        }
-
-        .no-scrollbar::-webkit-scrollbar {
-            display: none;
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; overflow: hidden; background-color: #09090b; color: #fafafa; }
+        .grid-cols-custom { grid-template-columns: 60px repeat(6, 1fr); }
+        .hour-row { height: 100px; position: relative; }
+        .drag-over { background-color: rgba(59, 130, 246, 0.1); }
+        input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        * { border-radius: 0px !important; }
+        .event-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); border-left-width: 4px; }
+        .event-hidden { opacity: 0.15; filter: grayscale(1) blur(1px); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
     </style>
 </head>
-<body class="bg-lightBg text-zinc-900 dark:bg-darkBg dark:text-zinc-100 transition-colors duration-300">
+<body class="dark">
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useMemo } = React;
-        
-        const Icon = ({ name, size = 16, className = "" }) => {
-            useEffect(() => {
-                if (window.lucide) window.lucide.createIcons();
-            }, [name]);
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const Icon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name, className]);
             return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
         };
 
         const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-        const HORAS = Array.from({ length: 17 }, (_, i) => i + 6);
+        const DIA_MAP_ICS = { 'Lunes': 'MO', 'Martes': 'TU', 'Miércoles': 'WE', 'Jueves': 'TH', 'Viernes': 'FR', 'Sábado': 'SA' };
+        const HORA_INICIO = 7;
+        const HORA_FIN = 23;
+        const HORAS = Array.from({ length: HORA_FIN - HORA_INICIO + 1 }, (_, i) => i + HORA_INICIO);
 
         const COLORS = [
-            { name: 'Gris', class: 'bg-zinc-800 border-zinc-500' },
-            { name: 'Indigo', class: 'bg-indigo-700 border-indigo-400' },
-            { name: 'Azul', class: 'bg-blue-700 border-blue-400' },
-            { name: 'Cian', class: 'bg-cyan-700 border-cyan-400' },
-            { name: 'Rojo', class: 'bg-red-800 border-red-500' },
-            { name: 'Púrpura', class: 'bg-purple-800 border-purple-500' }
+            { id: 'blue', bg: 'bg-blue-600', border: 'border-blue-800' },
+            { id: 'indigo', bg: 'bg-indigo-600', border: 'border-indigo-800' },
+            { id: 'purple', bg: 'bg-purple-600', border: 'border-purple-800' },
+            { id: 'emerald', bg: 'bg-emerald-600', border: 'border-emerald-800' },
+            { id: 'rose', bg: 'bg-rose-600', border: 'border-rose-800' },
+            { id: 'amber', bg: 'bg-amber-600', border: 'border-amber-800' }
         ];
 
+        const timeToMinutes = (t) => {
+            const [h, m] = t.split(':').map(Number);
+            return h * 60 + m;
+        };
+
+        const minutesToTime = (m) => {
+            const h = Math.floor(m / 60);
+            const min = m % 60;
+            return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+        };
+
         function App() {
-            const [isDark, setIsDark] = useState(() => localStorage.getItem('uni_theme') !== 'light');
             const [events, setEvents] = useState(() => {
-                const saved = localStorage.getItem('uni_events_v4');
+                const saved = localStorage.getItem('uni_planner_v12');
                 return saved ? JSON.parse(saved) : [];
             });
-            
-            const [showAddModal, setShowAddModal] = useState(false);
-            const [showImportModal, setShowImportModal] = useState(false);
-            const [currentTime, setCurrentTime] = useState(new Date());
+            const [showModal, setShowModal] = useState(false);
+            const [showHelp, setShowHelp] = useState(false);
+            const [editingId, setEditingId] = useState(null);
+            const [draggedEvent, setDraggedEvent] = useState(null);
+            const [copySuccess, setCopySuccess] = useState(false);
             const fileInputRef = useRef(null);
-
-            const [newEvent, setNewEvent] = useState({ 
-                nombre: '', dia: 'Lunes', inicio: 9, fin: 11, color: COLORS[1].class, aula: '' 
+            
+            const [form, setForm] = useState({
+                nombre: '', dias: ['Lunes'], inicio: '09:00', fin: '11:00', color: 'blue', aula: '', visible: true, groupToken: null
             });
 
             useEffect(() => {
-                document.documentElement.classList.toggle('dark', isDark);
-                localStorage.setItem('uni_theme', isDark ? 'dark' : 'light');
-            }, [isDark]);
-
-            useEffect(() => {
-                localStorage.setItem('uni_events_v4', JSON.stringify(events));
+                localStorage.setItem('uni_planner_v12', JSON.stringify(events));
             }, [events]);
 
-            useEffect(() => {
-                const timer = setInterval(() => setCurrentTime(new Date()), 60000); 
-                return () => clearInterval(timer);
-            }, []);
+            const clearAll = () => {
+                if(window.confirm("¿Deseas eliminar todas las materias?")) setEvents([]);
+            };
 
-            const addEvent = () => {
-                // Reparado: Validación más flexible y conversión forzada a número
-                const hInicio = parseInt(newEvent.inicio);
-                const hFin = parseInt(newEvent.fin);
+            const toggleVisibility = (groupToken, e) => {
+                e.stopPropagation();
+                setEvents(prev => prev.map(ev => 
+                    ev.groupToken === groupToken ? { ...ev, visible: !ev.visible } : ev
+                ));
+            };
 
-                if (!newEvent.nombre.trim()) {
-                    alert("Por favor, ingresa el nombre de la materia.");
-                    return;
-                }
-                if (hInicio >= hFin) {
-                    alert("La hora de inicio debe ser menor a la de fin.");
-                    return;
-                }
-
-                const eventToSave = { 
-                    ...newEvent, 
-                    id: Date.now(),
-                    inicio: hInicio,
-                    fin: hFin
-                };
-
-                setEvents(prev => [...prev, eventToSave]);
-                
-                // Reset del formulario
-                setNewEvent({ 
-                    nombre: '', 
-                    dia: newEvent.dia, 
-                    inicio: 9, 
-                    fin: 11, 
-                    color: newEvent.color, 
-                    aula: '' 
+            const exportToICS = () => {
+                if (events.length === 0) return;
+                let icsContent = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//UniPlanner//Schedule//ES", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
+                events.filter(e => e.visible).forEach(event => {
+                    const startStr = event.inicio.replace(':', '') + "00";
+                    const endStr = event.fin.replace(':', '') + "00";
+                    const dayCode = DIA_MAP_ICS[event.dia];
+                    icsContent.push("BEGIN:VEVENT", `SUMMARY:${event.nombre}`, `LOCATION:${event.aula || 'Sin aula'}`, `DTSTART;TZID=America/Argentina/Buenos_Aires:20240101T${startStr}`, `DTEND;TZID=America/Argentina/Buenos_Aires:20240101T${endStr}`, `RRULE:FREQ=WEEKLY;BYDAY=${dayCode}`, "END:VEVENT");
                 });
-                setShowAddModal(false);
+                icsContent.push("END:VCALENDAR");
+                const blob = new Blob([icsContent.join("\r\n")], { type: 'text/calendar;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = "mi_horario.ics";
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
             };
 
-            const removeEvent = (id) => {
-                setEvents(prev => prev.filter(e => e.id !== id));
-            };
+            const handleCSVImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const content = event.target.result;
+                    const lines = content.split('\n');
+                    const newEvents = [];
+                    lines.forEach((line, index) => {
+                        const parts = line.split(',').map(p => p.trim());
+                        if (parts.length >= 4) {
+                            const [nombre, diasRaw, inicio, fin, color, aula] = parts;
+                            
+                            // Lógica de detección de múltiples días en la misma celda (sep por -, /, espacio o coma extraña)
+                            const diasDetectados = diasRaw.split(/[\-\/\s]+/).map(d => {
+                                // Limpieza básica de caracteres
+                                return d.charAt(0).toUpperCase() + d.slice(1).toLowerCase().trim();
+                            }).filter(d => DIAS.includes(d));
 
-            const clearAllEvents = () => {
-                if (window.confirm('¿ELIMINAR TODO? Esta acción no se puede deshacer.')) {
-                    setEvents([]);
-                    localStorage.removeItem('uni_events_v4');
-                }
+                            if (diasDetectados.length > 0) {
+                                const groupToken = `csv-${Date.now()}-${index}`;
+                                diasDetectados.forEach((dia, dIdx) => {
+                                    newEvents.push({ 
+                                        id: `${groupToken}-${dIdx}`, 
+                                        nombre, 
+                                        dia, 
+                                        inicio, 
+                                        fin, 
+                                        color: color || 'blue', 
+                                        aula: aula || '', 
+                                        visible: true, 
+                                        groupToken 
+                                    });
+                                });
+                            }
+                        }
+                    });
+                    if (newEvents.length > 0) setEvents(prev => [...prev, ...newEvents]);
+                };
+                reader.readAsText(file);
+                e.target.value = null;
             };
 
             const copyPrompt = () => {
-                const promptText = `Genera un archivo CSV para mi calendario siguiendo este formato exacto (sin espacios después de las comas):
-Materia,Dia,Inicio,Fin,Color,Aula
-"Analisis I","Lunes",9,11,"bg-indigo-700 border-indigo-400","Aula 302"
+                const prompt = `Actúa como un experto organizador académico. Por favor, toma mi lista de materias y horarios de la facultad y devuélveme exclusivamente un bloque de texto CSV (sin explicaciones, solo el contenido del archivo) que siga este formato exacto:
+Nombre, Día, Inicio, Fin, Color, Aula
 
-Días: Lunes, Martes, Miércoles, Jueves, Viernes, Sábado.
-Colores: "bg-zinc-800 border-zinc-500", "bg-indigo-700 border-indigo-400", "bg-blue-700 border-blue-400", "bg-cyan-700 border-cyan-400", "bg-red-800 border-red-500", "bg-purple-800 border-purple-500".`;
+Restricciones:
+1. El día puede ser uno solo (ej: Lunes) o varios separados por guion si la materia se repite igual (ej: Lunes-Miércoles-Viernes).
+2. Los días válidos son: Lunes, Martes, Miércoles, Jueves, Viernes, Sábado.
+3. Formato de hora: HH:MM (24h).
+4. Colores disponibles: blue, indigo, purple, emerald, rose, amber.
+
+Aquí están mis horarios: [PEGA AQUÍ TUS HORARIOS]`;
                 
                 const textArea = document.createElement("textarea");
-                textArea.value = promptText;
+                textArea.value = prompt;
                 document.body.appendChild(textArea);
                 textArea.select();
-                document.execCommand('copy');
+                try {
+                    document.execCommand('copy');
+                    setCopySuccess(true);
+                    setTimeout(() => setCopySuccess(false), 2000);
+                } catch (err) {}
                 document.body.removeChild(textArea);
-                alert("¡Prompt copiado!");
             };
 
-            const exportICS = () => {
-                let icsContent = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//UniPlanner//ES\n";
-                const diaMap = { 'Lunes': 'MO', 'Martes': 'TU', 'Miércoles': 'WE', 'Jueves': 'TH', 'Viernes': 'FR', 'Sábado': 'SA' };
-                events.forEach(e => {
-                    icsContent += "BEGIN:VEVENT\n";
-                    icsContent += `SUMMARY:${e.nombre}\n`;
-                    icsContent += `LOCATION:${e.aula || 'TBD'}\n`;
-                    icsContent += `RRULE:FREQ=WEEKLY;BYDAY=${diaMap[e.dia]}\n`;
-                    icsContent += `DTSTART:20250101T${e.inicio.toString().padStart(2, '0')}0000\n`;
-                    icsContent += `DTEND:20250101T${e.fin.toString().padStart(2, '0')}0000\n`;
-                    icsContent += "END:VEVENT\n";
-                });
-                icsContent += "END:VCALENDAR";
-                const blob = new Blob([icsContent], { type: 'text/calendar' });
-                const link = document.createElement("a");
-                link.href = URL.createObjectURL(blob);
-                link.download = "horario.ics";
-                link.click();
+            const handleSave = () => {
+                if (!form.nombre || form.dias.length === 0) return;
+                const groupToken = editingId ? events.find(e => e.id === editingId).groupToken : Date.now().toString();
+
+                if (editingId) {
+                    const baseVisible = events.find(e => e.groupToken === groupToken)?.visible ?? true;
+                    const newEntries = form.dias.map((d, i) => ({
+                        ...form,
+                        id: `${groupToken}-${i}`,
+                        dia: d,
+                        groupToken,
+                        visible: baseVisible
+                    }));
+                    setEvents([...events.filter(e => e.groupToken !== groupToken), ...newEntries]);
+                } else {
+                    const newEntries = form.dias.map((d, i) => ({
+                        ...form,
+                        id: `${groupToken}-${i}`,
+                        dia: d,
+                        groupToken,
+                        visible: true
+                    }));
+                    setEvents([...events, ...newEntries]);
+                }
+                closeModal();
             };
 
-            const handleImportCSV = (event) => {
-                const file = event.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    try {
-                        const text = e.target.result;
-                        const lines = text.split('\n').filter(l => l.trim() !== '').slice(1);
-                        const imported = lines.map(line => {
-                            const parts = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-                            if (parts.length < 5) return null;
-                            return {
-                                id: Math.random() * Date.now(),
-                                nombre: parts[0].replace(/"/g, ''),
-                                dia: parts[1].replace(/"/g, ''),
-                                inicio: parseInt(parts[2]),
-                                fin: parseInt(parts[3]),
-                                color: parts[4].replace(/"/g, ''),
-                                aula: parts[5] ? parts[5].replace(/"/g, '') : ''
-                            };
-                        }).filter(Boolean);
-                        setEvents(prev => [...prev, ...imported]);
-                    } catch (err) { alert("Error en el formato del CSV"); }
+            const openEdit = (event) => {
+                const groupEvents = events.filter(e => e.groupToken === event.groupToken);
+                setForm({ ...event, dias: groupEvents.map(e => e.dia) });
+                setEditingId(event.id);
+                setShowModal(true);
+            };
+
+            const closeModal = () => {
+                setShowModal(false);
+                setEditingId(null);
+                setForm({ nombre: '', dias: ['Lunes'], inicio: '09:00', fin: '11:00', color: 'blue', aula: '', visible: true, groupToken: null });
+            };
+
+            const onDrop = (e, day, hour) => {
+                e.preventDefault();
+                if (!draggedEvent) return;
+                const duration = timeToMinutes(draggedEvent.fin) - timeToMinutes(draggedEvent.inicio);
+                const newStartMin = hour * 60;
+                setEvents(events.map(ev => 
+                    ev.id === draggedEvent.id 
+                        ? { ...ev, dia: day, inicio: minutesToTime(newStartMin), fin: minutesToTime(newStartMin + duration) } 
+                        : ev
+                ));
+                setDraggedEvent(null);
+            };
+
+            const getLayoutStyles = (event, dayEvents) => {
+                const start = timeToMinutes(event.inicio);
+                const end = timeToMinutes(event.fin);
+                const overlapping = dayEvents.filter(other => {
+                    const oStart = timeToMinutes(other.inicio);
+                    const oEnd = timeToMinutes(other.fin);
+                    return (start < oEnd && end > oStart);
+                }).sort((a, b) => timeToMinutes(a.inicio) - timeToMinutes(b.inicio));
+                const width = 100 / (overlapping.length || 1);
+                const index = overlapping.findIndex(o => o.id === event.id);
+                return {
+                    width: `${width}%`,
+                    left: `${index * width}%`,
+                    top: `${(start % 60 / 60) * 100}%`,
+                    height: `${((end - start) / 60) * 100}px`
                 };
-                reader.readAsText(file);
             };
-
-            const nextClass = useMemo(() => {
-                const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-                const todayName = dayNames[currentTime.getDay()];
-                const currentHour = currentTime.getHours();
-                return events
-                    .filter(e => e.dia === todayName && e.inicio > currentHour)
-                    .sort((a, b) => a.inicio - b.inicio)[0];
-            }, [events, currentTime]);
 
             return (
-                <div className="min-h-screen flex flex-col">
-                    <header className="sticky top-0 z-50 px-4 py-3 border-b border-zinc-200 dark:border-zinc-800 header-blur bg-white/70 dark:bg-black/70 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <div className="bg-black dark:bg-white p-1 rounded-sm">
-                                <Icon name="grid" className="text-white dark:text-black" size={14} />
+                <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
+                    <header className="h-16 border-b border-zinc-800 flex items-center justify-between px-6 bg-zinc-900/50 backdrop-blur-xl shrink-0 z-40">
+                        <div className="flex items-center gap-6">
+                            <h1 className="text-xl font-black italic tracking-tighter text-blue-500 uppercase">UniPlanner</h1>
+                            <div className="flex gap-1 border-l border-zinc-800 ml-4 pl-4 items-center">
+                                <button onClick={exportToICS} className="flex items-center gap-2 p-2 hover:bg-zinc-800 text-zinc-400 transition-colors text-[10px] font-bold uppercase tracking-widest">
+                                    <Icon name="calendar" size={16}/> .ICS
+                                </button>
+                                
+                                <input type="file" accept=".csv" className="hidden" ref={fileInputRef} onChange={handleCSVImport} />
+                                <button onClick={() => fileInputRef.current.click()} className="flex items-center gap-2 p-2 hover:bg-zinc-800 text-zinc-400 transition-colors text-[10px] font-bold uppercase tracking-widest">
+                                    <Icon name="file-up" size={16}/> .CSV
+                                </button>
+
+                                <button onClick={() => setShowHelp(!showHelp)} className={`p-2 transition-colors ${showHelp ? 'text-blue-500' : 'text-zinc-600 hover:text-zinc-400'}`}>
+                                    <Icon name="info" size={16}/>
+                                </button>
+
+                                <button onClick={clearAll} className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-rose-500 transition-colors ml-2">
+                                    <Icon name="trash-2" size={16}/>
+                                </button>
                             </div>
-                            <h1 className="font-black text-xs uppercase tracking-tighter">PLANNER <span className="text-zinc-400 italic">PRO</span></h1>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => setIsDark(!isDark)} className="p-2 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-full transition-colors">
-                                <Icon name={isDark ? "sun" : "moon"} size={16} />
-                            </button>
-                            <button onClick={() => setShowAddModal(true)} className="bg-black dark:bg-white text-white dark:text-black px-4 py-1.5 font-bold text-[10px] uppercase tracking-widest hover:opacity-80 active:scale-95 transition-all">
-                                + CLASE
-                            </button>
-                        </div>
+                        <button onClick={() => setShowModal(true)} className="bg-blue-600 hover:bg-blue-500 px-6 py-2 font-bold text-xs uppercase tracking-widest transition-all shadow-lg shadow-blue-900/20">
+                            + Añadir Clase
+                        </button>
                     </header>
 
-                    <main className="flex-1 overflow-y-auto w-full max-w-7xl mx-auto p-3 md:p-6 space-y-4">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
-                            <div className="col-span-2 md:col-span-3 p-4 border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 flex flex-col justify-center min-h-[80px]">
-                                {nextClass ? (
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-[8px] font-bold uppercase text-zinc-400 mb-1 tracking-widest">Siguiente</p>
-                                            <h2 className="text-lg md:text-xl font-black uppercase tracking-tighter truncate max-w-[200px]">{nextClass.nombre}</h2>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-[10px] font-mono text-zinc-500">{nextClass.inicio}:00 hs</div>
-                                            <div className="text-[9px] font-bold text-zinc-400 uppercase">@{nextClass.aula || 'TBD'}</div>
-                                        </div>
+                    <main className="flex-1 overflow-auto p-4 md:p-8 hide-scrollbar relative">
+                        {showHelp && (
+                            <div className="mb-6 bg-blue-950/20 border border-blue-900/50 p-6 animate-fade-in relative">
+                                <button onClick={() => setShowHelp(false)} className="absolute top-4 right-4 text-zinc-500 hover:text-white"><Icon name="x" size={16}/></button>
+                                <div className="flex flex-col md:flex-row gap-8">
+                                    <div className="flex-1">
+                                        <h3 className="text-xs font-black uppercase tracking-widest text-blue-400 mb-3">Formato CSV Inteligente</h3>
+                                        <p className="text-[10px] text-zinc-400 mb-3">Ahora puedes agrupar días en una misma línea:</p>
+                                        <code className="block bg-black p-4 text-[10px] font-mono text-zinc-400 border border-zinc-800">
+                                            Nombre, Día, Inicio, Fin, Color, Aula<br/>
+                                            Sistemas, Lunes-Jueves, 08:00, 10:00, blue, Aula 2<br/>
+                                            Diseño, Martes-Viernes, 14:00, 16:00, rose, Lab 1
+                                        </code>
                                     </div>
-                                ) : (
-                                    <p className="text-[9px] uppercase font-bold text-zinc-400 tracking-widest">No hay más clases hoy</p>
-                                )}
-                            </div>
-                            <div className="col-span-2 md:col-span-1 p-4 border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
-                                <p className="text-[8px] font-bold uppercase text-zinc-400 mb-1 tracking-widest">Total Semanal</p>
-                                <h3 className="text-xl md:text-2xl font-black italic">
-                                    {events.reduce((acc, curr) => acc + (curr.fin - curr.inicio), 0)} 
-                                    <span className="text-[9px] opacity-40 ml-1">HORAS</span>
-                                </h3>
-                            </div>
-                        </div>
-
-                        <div className="flex overflow-x-auto gap-2 no-scrollbar py-1">
-                            <input type="file" accept=".csv" ref={fileInputRef} onChange={handleImportCSV} className="hidden" />
-                            <button onClick={() => setShowImportModal(true)} className="flex-none flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 dark:border-zinc-800 text-[9px] font-bold uppercase hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors bg-white dark:bg-transparent">
-                                <Icon name="upload" size={12} /> Importar
-                            </button>
-                            <button onClick={exportICS} className="flex-none flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 dark:border-zinc-800 text-[9px] font-bold uppercase hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors bg-white dark:bg-transparent">
-                                <Icon name="calendar" size={12} /> Exportar .ICS
-                            </button>
-                            <button onClick={clearAllEvents} className="flex-none flex items-center gap-1.5 px-3 py-1.5 border border-red-200 dark:border-red-900/30 text-[9px] font-bold uppercase text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors bg-white dark:bg-transparent ml-auto">
-                                <Icon name="trash-2" size={12} /> Limpiar Todo
-                            </button>
-                        </div>
-
-                        <div className="border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black overflow-hidden shadow-sm">
-                            <div className="w-full">
-                                <div className="grid grid-cols-7 grid-cols-mobile border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/40">
-                                    <div className="h-10 border-r border-zinc-200 dark:border-zinc-800/30 flex items-center justify-center">
-                                        <Icon name="clock" size={10} className="text-zinc-400" />
+                                    <div className="flex-1">
+                                        <h3 className="text-xs font-black uppercase tracking-widest text-blue-400 mb-3">Asistente IA</h3>
+                                        <p className="text-xs text-zinc-400 mb-4 leading-relaxed">Pega tus horarios en un chatbot usando este prompt para que cree el CSV por ti.</p>
+                                        <button 
+                                            onClick={copyPrompt}
+                                            className={`flex items-center gap-2 px-4 py-2 text-[10px] font-black uppercase tracking-tighter transition-all ${copySuccess ? 'bg-emerald-600' : 'bg-zinc-800 hover:bg-zinc-700'}`}
+                                        >
+                                            <Icon name={copySuccess ? "check" : "copy"} size={14}/>
+                                            {copySuccess ? '¡Prompt Copiado!' : 'Copiar Prompt para Chatbot'}
+                                        </button>
                                     </div>
-                                    {DIAS.map(dia => (
-                                        <div key={dia} className="h-10 flex items-center justify-center text-[8px] md:text-[10px] font-black uppercase border-l border-zinc-200/50 dark:border-zinc-800/10 text-zinc-500 italic">
-                                            {dia.substring(0, 3)}
-                                        </div>
-                                    ))}
                                 </div>
-                                
-                                <div className="relative">
-                                    {HORAS.map(hora => (
-                                        <div key={hora} className="grid grid-cols-7 grid-cols-mobile border-b border-zinc-100 dark:border-zinc-900 h-14 md:h-20">
-                                            <div className="text-[8px] font-mono text-center flex items-center justify-center opacity-40 border-r border-zinc-200/30 bg-zinc-50 dark:bg-zinc-950/40">
-                                                {hora}
-                                            </div>
-                                            {DIAS.map(dia => {
-                                                const startEvent = events.find(e => e.dia === dia && e.inicio === hora);
-                                                return (
-                                                    <div key={dia} className="relative border-l border-zinc-200 dark:border-zinc-800/5">
-                                                        {startEvent && (
-                                                            <div 
-                                                                className={`absolute inset-x-0 z-10 p-1 md:p-2 flex flex-col justify-between border-b border-r ${startEvent.color} text-white event-node shadow-md group overflow-hidden`}
-                                                                style={{ 
-                                                                    top: '0', 
-                                                                    height: `calc(${(startEvent.fin - startEvent.inicio) * (window.innerWidth < 640 ? 3.5 : 5)}rem)`,
-                                                                    zIndex: 20
-                                                                }}
-                                                            >
-                                                                <div className="pointer-events-none">
-                                                                    <div className="font-black uppercase text-[7px] md:text-[10px] leading-tight mb-0.5">{startEvent.nombre}</div>
-                                                                    <div className="text-[6px] opacity-80">{startEvent.aula}</div>
+                            </div>
+                        )}
+
+                        <div className="min-w-[1000px] border border-zinc-800 bg-zinc-900/30">
+                            <div className="grid grid-cols-custom border-b border-zinc-800 bg-zinc-900/50">
+                                <div className="p-4 border-r border-zinc-800"></div>
+                                {DIAS.map(d => <div key={d} className="p-4 text-center text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">{d}</div>)}
+                            </div>
+
+                            <div className="relative">
+                                {HORAS.map(h => (
+                                    <div key={h} className="grid grid-cols-custom hour-row border-b border-zinc-800/30">
+                                        <div className="flex justify-center pt-2 text-[10px] font-mono font-bold text-zinc-600 border-r border-zinc-800/50">{String(h).padStart(2, '0')}:00</div>
+                                        {DIAS.map(d => {
+                                            const dayEvents = events.filter(ev => ev.dia === d);
+                                            return (
+                                                <div key={d} className="relative border-r border-zinc-800/20" onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }} onDragLeave={(e) => e.currentTarget.classList.remove('drag-over')} onDrop={(e) => { e.currentTarget.classList.remove('drag-over'); onDrop(e, d, h); }}>
+                                                    {dayEvents.filter(ev => Math.floor(timeToMinutes(ev.inicio)/60) === h).map(event => {
+                                                        const color = COLORS.find(c => c.id === event.color) || COLORS[0];
+                                                        const layout = getLayoutStyles(event, dayEvents);
+                                                        return (
+                                                            <div key={event.id} draggable onDragStart={() => setDraggedEvent(event)} onDoubleClick={() => openEdit(event)} className={`absolute z-10 event-card p-3 cursor-grab active:cursor-grabbing border-l-4 shadow-xl ${color.bg} ${color.border} ${!event.visible ? 'event-hidden' : ''}`} style={{ ...layout, zIndex: event.visible ? 10 : 5 }}>
+                                                                <div className="flex flex-col h-full relative overflow-hidden">
+                                                                    <button onClick={(e) => toggleVisibility(event.groupToken, e)} className="absolute top-0 right-0 p-1 bg-black/20 hover:bg-black/40 transition-colors z-20">
+                                                                        <Icon name={event.visible ? "eye" : "eye-off"} size={12} />
+                                                                    </button>
+                                                                    <div className="pr-5">
+                                                                        <h4 className="font-black text-[11px] leading-tight uppercase truncate">{event.nombre}</h4>
+                                                                        <p className="text-[9px] font-bold opacity-80 mt-1">{event.inicio} - {event.fin}</p>
+                                                                    </div>
+                                                                    <div className="mt-auto pt-1 flex items-center gap-1 text-[9px] font-bold opacity-70 border-t border-white/10"><Icon name="map-pin" size={10}/> {event.aula || 'S/A'}</div>
                                                                 </div>
-                                                                <button onClick={(e) => { e.stopPropagation(); removeEvent(startEvent.id); }} className="absolute top-0 right-0 p-1 bg-black/20 hover:bg-black/40 transition-all opacity-0 group-hover:opacity-100">
-                                                                    <Icon name="x" size={10} />
-                                                                </button>
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    ))}
-                                </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     </main>
 
-                    {/* Modal Añadir */}
-                    {showAddModal && (
-                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-                            <div className="relative w-full max-w-sm p-6 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 shadow-2xl">
-                                <div className="flex justify-between items-center mb-6">
-                                    <h2 className="text-xs font-black uppercase tracking-[0.2em] italic">NUEVA CLASE</h2>
-                                    <button onClick={() => setShowAddModal(false)}><Icon name="x" size={20}/></button>
-                                </div>
-                                <div className="space-y-4">
-                                    <input placeholder="MATERIA (Ej: Análisis I)" className="w-full p-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 text-xs font-bold uppercase outline-none" value={newEvent.nombre} onChange={e => setNewEvent({...newEvent, nombre: e.target.value})}/>
-                                    
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div className="space-y-1">
-                                            <p className="text-[8px] font-bold text-zinc-400">DÍA</p>
-                                            <select className="w-full p-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 text-[10px] font-bold uppercase" value={newEvent.dia} onChange={e => setNewEvent({...newEvent, dia: e.target.value})}>
-                                                {DIAS.map(d => <option key={d} value={d}>{d}</option>)}
-                                            </select>
-                                        </div>
-                                        <div className="space-y-1">
-                                            <p className="text-[8px] font-bold text-zinc-400">AULA</p>
-                                            <input placeholder="OPCIONAL" className="w-full p-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 text-[10px] uppercase" value={newEvent.aula} onChange={e => setNewEvent({...newEvent, aula: e.target.value})}/>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div className="space-y-1">
-                                            <p className="text-[8px] font-bold text-zinc-400">INICIO (HS)</p>
-                                            <input type="number" min="6" max="22" className="w-full p-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 text-xs" value={newEvent.inicio} onChange={e => setNewEvent({...newEvent, inicio: e.target.value})}/>
-                                        </div>
-                                        <div className="space-y-1">
-                                            <p className="text-[8px] font-bold text-zinc-400">FIN (HS)</p>
-                                            <input type="number" min="7" max="23" className="w-full p-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 text-xs" value={newEvent.fin} onChange={e => setNewEvent({...newEvent, fin: e.target.value})}/>
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <p className="text-[8px] font-bold text-zinc-400 uppercase">Color de etiqueta</p>
-                                        <div className="flex gap-2 py-2 overflow-x-auto no-scrollbar">
-                                            {COLORS.map(c => (
-                                                <button key={c.class} onClick={() => setNewEvent({...newEvent, color: c.class})} className={`w-8 h-8 shrink-0 rounded-full ${c.class} border-2 ${newEvent.color === c.class ? 'border-zinc-400 dark:border-white scale-110' : 'border-transparent'} transition-transform`} />
+                    {showModal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm">
+                            <div className="bg-zinc-900 w-full max-w-sm p-8 border border-zinc-800 shadow-2xl">
+                                <h3 className="text-lg font-black italic mb-6 tracking-tighter uppercase">{editingId ? 'Editar Materia' : 'Nueva Materia'}</h3>
+                                <div className="space-y-5">
+                                    <input autoFocus placeholder="Materia" className="w-full bg-zinc-950 border border-zinc-800 p-4 font-bold focus:border-blue-500 outline-none" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
+                                    <div>
+                                        <p className="text-[10px] font-black text-zinc-500 mb-2 uppercase tracking-widest">Días de cursada</p>
+                                        <div className="flex justify-between gap-1">
+                                            {DIAS.map(d => (
+                                                <button key={d} onClick={() => {
+                                                    const current = form.dias;
+                                                    setForm({...form, dias: current.includes(d) ? (current.length > 1 ? current.filter(x => x !== d) : current) : [...current, d]});
+                                                }} className={`w-10 h-10 border text-[10px] font-black transition-all ${form.dias.includes(d) ? 'bg-blue-600 border-blue-400 text-white' : 'bg-zinc-950 border-zinc-800 text-zinc-600'}`}>{d.substring(0, 2)}</button>
                                             ))}
                                         </div>
                                     </div>
-
-                                    <button onClick={addEvent} className="w-full bg-black dark:bg-white text-white dark:text-black py-4 font-black text-[10px] uppercase tracking-widest hover:opacity-90 active:scale-[0.98] transition-all">
-                                        AÑADIR A MI HORARIO
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Modal Importar */}
-                    {showImportModal && (
-                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl">
-                            <div className="relative w-full max-w-md p-6 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 shadow-2xl">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h2 className="text-[10px] font-black uppercase tracking-[0.2em] italic">GUÍA DE IMPORTACIÓN</h2>
-                                    <button onClick={() => setShowImportModal(false)}><Icon name="x" size={20}/></button>
-                                </div>
-                                <div className="space-y-4">
-                                    <div className="p-3 bg-zinc-100 dark:bg-black border border-zinc-200 dark:border-zinc-800">
-                                        <p className="text-[9px] font-bold text-zinc-400 uppercase mb-2">Formato de Columnas:</p>
-                                        <code className="text-[10px] font-mono text-indigo-500 dark:text-indigo-400 block break-all">
-                                            Materia,Dia,Inicio,Fin,Color,Aula
-                                        </code>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <input type="time" className="w-full bg-zinc-950 border border-zinc-800 p-3 font-bold" value={form.inicio} onChange={e => setForm({...form, inicio: e.target.value})} />
+                                        <input type="time" className="w-full bg-zinc-950 border border-zinc-800 p-3 font-bold" value={form.fin} onChange={e => setForm({...form, fin: e.target.value})} />
                                     </div>
-                                    <button onClick={copyPrompt} className="w-full flex items-center justify-center gap-2 p-3 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors font-bold uppercase text-[9px] tracking-widest">
-                                        <Icon name="copy" size={14}/> Copiar Prompt IA
-                                    </button>
-                                    <button onClick={() => { setShowImportModal(false); fileInputRef.current.click(); }} className="w-full bg-black dark:bg-white text-white dark:text-black p-4 font-black uppercase text-[10px] tracking-widest">
-                                        IMPORTAR ARCHIVO .CSV
-                                    </button>
+                                    <input placeholder="Aula / Salón" className="w-full bg-zinc-950 border border-zinc-800 p-4 font-bold outline-none" value={form.aula} onChange={e => setForm({...form, aula: e.target.value})} />
+                                    <div className="flex justify-between px-2 pt-2">
+                                        {COLORS.map(c => (
+                                            <button key={c.id} onClick={() => setForm({...form, color: c.id})} className={`w-8 h-8 ${c.bg} ${form.color === c.id ? 'ring-2 ring-white ring-offset-4 ring-offset-zinc-900 scale-110' : 'opacity-30 hover:opacity-100'}`} />
+                                        ))}
+                                    </div>
+                                    <div className="flex gap-2 pt-6">
+                                        {editingId && (
+                                            <button onClick={() => { 
+                                                const groupToken = events.find(e => e.id === editingId).groupToken;
+                                                setEvents(events.filter(e => e.groupToken !== groupToken)); 
+                                                closeModal(); 
+                                            }} className="p-4 bg-zinc-800 text-rose-500 hover:bg-rose-900/20"><Icon name="trash-2" /></button>
+                                        )}
+                                        <button onClick={handleSave} className="flex-1 bg-blue-600 p-4 font-black text-xs uppercase tracking-widest shadow-lg shadow-blue-900/20">{editingId ? 'Guardar Cambios' : 'Añadir Materia'}</button>
+                                    </div>
+                                    <button onClick={closeModal} className="w-full py-2 text-[10px] font-black text-zinc-600 uppercase tracking-widest">Cerrar</button>
                                 </div>
                             </div>
                         </div>
